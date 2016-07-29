@@ -9,13 +9,10 @@ import os
 import logging
 import argparse
 import getpass
-import re
 import time
 import signal
 import socket
 import atexit
-from colored import fore, style
-from IPy import IP
 from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 
 """
