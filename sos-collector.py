@@ -13,32 +13,21 @@ import time
 import signal
 import socket
 import atexit
+import validators
 from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 
 """
 Provide parser validation
 """
-# For hostnames
-def is_valid_hostname(hostname):
-    if len(hostname) > 255:
+def is_valid(hostname):
+    # Test if hostname is either a valid IP address or FQDN
+    if (
+    validators.ip_address.ipv4(hostname) or
+    validators.domain(hostname)
+    ):
+        return True
+    else:
         return False
-    if hostname[-1] == ".":
-        hostname = hostname[:-1]
-    allowed = re.compile("(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
-    return all(allowed.match(x) for x in hostname.split("."))
-
-# For IP addresses
-def is_valid_ipaddr(address):
-    try:
-        socket.inet_pton(socket.AF_INET, address)
-    except AttributeError:
-        try:
-            socket.inet_aton(address)
-        except socket.error:
-            return False
-    except socket.error:
-        return False
-    return True
 
 """
 Generate the list of hosts to use
@@ -53,16 +42,10 @@ are truly valid using is_valid_ipaddr() and is_valid_hostname()
 """
 def parse_host_list():
     for item in host_list:
-        # FIXME: This is a poor way of doing this, but it works for now for testing
-        # If first character in string isdigit assume IP
-        if item[0].isdigit():
-            if is_valid_ipaddr(item) == False:
-                raise SyntaxError("{0} is not a valid IP address, please correct it and rerun sos-collector".format(item))
-                sys.exit(1)
-        else:
-            if is_valid_hostname(item) == False:
-                raise SyntaxError("{0} is not a valid hostname, please correct it and rerun sos-collector".format(item))
-                sys.exit(1)
+        if is_valid(item) == False:
+            logging.error("{0} is not a valid FQDN or IPv4 address, \
+please correct it and rerun sos-collector".format(item))
+            sys.exit(1)
 
 """
 Configure keyless ssh for each host in host_list
@@ -70,8 +53,8 @@ Configure keyless ssh for each host in host_list
 def configure_ssh():
     homedir = os.path.expanduser('~')
     logging.info("Generating keyless ssh for the root user on each host.")
-
     # Check to make sure the user has an id_rsa.pub file before continuing
+    logging.debug("Check for id_rsa.pub existence")
     if os.path.isfile('{0}/.ssh/id_rsa.pub'.format(homedir)) == False:
         # For now we'll just prompt the user to run ssh-keygen on their own.  We
         # can probably use the Crypto library in the future to do this for users
@@ -81,7 +64,7 @@ def configure_ssh():
         sys.exit(1)
     else:
         pass
-
+    logging.debug("Run ssh-deploy-key on host_list")
     for each in host_list:
         ssh_deploy_key_args = [ 'ssh-deploy-key',
                     '-u', 'root',
@@ -149,8 +132,9 @@ def main():
     parser.add_argument("-f",
                         "--host-file",
                         dest="host_file",
-                        help="Specify a file which contains a list of hosts to \
-                        use instead of specifying with -h, --hosts.")
+                        help="Specify a file which contains a list of hosts \
+                        to use instead of specifying with -h, --hosts. \
+                        See README for information on how to format this list.")
     parser.add_argument("-d",
                         "--directory",
                         dest="directory",
@@ -178,16 +162,18 @@ def main():
     if args.host_list == None and args.host_file == None:
         logging.error("No hosts were specified.  Use either -h or -F to specify a list of hosts.  See --help for more info.")
         sys.exit(1)
+    # Generate and parse the host-list before we ask any questions
+    generate_host_list()
+    parse_host_list()
     # Prompt the user for the same information that sosreport requests during
     # initial start.  We'll follow the same design sosreport does here and not
     # perform any validation on these answers.
     username = question("string","Please enter your first initial and last name")
     caseid = question("string","Please enter the case id that you are generating this report for")
     #FIXME: Find out a way to handle different rootpw's
-    rootPassword = getpass.getpass("Enter the root password for the machines: ")
-
-    generate_host_list()
-    parse_host_list()
+    rootPassword = getpass.getpass("Enter the root password for the machines \
+(if you wish to use different root passwords you must specify them via a host \
+file using -f, --host-file): ")
     configure_ssh()
 
 if __name__ == '__main__':
