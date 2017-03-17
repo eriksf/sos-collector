@@ -33,14 +33,14 @@ def is_valid(hostname):
 Generate the list of hosts to use
 """
 def generate_host_list():
-    global host_list
     host_list = set(args.host_list.split(","))
+    return host_list
 
 """
 Parse the generated list and determine if the provided hostnames or IP addresses
-are truly valid using is_valid_ipaddr() and is_valid_hostname()
+are truly valid using is_valid()
 """
-def parse_host_list():
+def parse_host_list(host_list):
     for item in host_list:
         if is_valid(item) == False:
             logging.error("{0} is not a valid FQDN or IPv4 address, \
@@ -48,9 +48,31 @@ please correct it and rerun sos-collector".format(item))
             sys.exit(1)
 
 """
-Configure keyless ssh for each host in host_list
+Parse properly formatted host_file, similar to parse_host_list but for a file
+instead of a comma-delimted list of hosts
 """
-def configure_ssh():
+def parse_host_file(input_file):
+    # Read input file
+    try:
+        open(input_file, "r+").read();
+    except IOError as e:
+        logging.error('Unable to parse host-file: {0}'.format(e))
+        sys.exit(1)
+    # Create a dictionary of 'hostname': 'rootPassword'
+    host_dict = {}
+    with open(input_file, 'r') as f:
+        for line in f:
+            x = line.split('::')
+            host = x[0]
+            password = x[1]
+            password = password[:-1]
+            host_dict[host]=password
+    return host_dict
+
+"""
+Perform ssh prechecks
+"""
+def ssh_precheck():
     homedir = os.path.expanduser('~')
     logging.info("Generating keyless ssh for the root user on each host.")
     # Check to make sure the user has an id_rsa.pub file before continuing
@@ -64,6 +86,11 @@ def configure_ssh():
         sys.exit(1)
     else:
         pass
+
+"""
+Configure keyless ssh for each host in host_list
+"""
+def configure_ssh_for_list(host_list):
     logging.debug("Run ssh-deploy-key on host_list")
     for each in host_list:
         ssh_deploy_key_args = [ 'ssh-deploy-key',
@@ -72,6 +99,15 @@ def configure_ssh():
                     '{0}'.format(each)]
         ssh_deploy_key = Popen(ssh_deploy_key_args)
         ssh_deploy_key.wait()
+
+"""
+Configure keyless ssh for each host in a given host_file, extra steps are needed
+here over configure_ssh_for_list() as the rootPassword's can differ here.
+Because of this, this function requires a dict built using parse_host_file()
+"""
+def configure_ssh_for_file(host_dict, input_file):
+    logging.debug("Run ssh-deploy-key on given hosts in {0}".format(input_file))
+
 
 """
 Cleanup and log on exit
@@ -141,6 +177,13 @@ def main():
                         help="Define the targetted directory the sosreports \
                         will be downloaded to and processed in.  Defaults to \
                         the present working directory")
+    parser.add_argument("--no-root",
+                        dest="no_root",
+                        action='store_true',
+                        help="Skips the root password asks.  Use this option \
+                        if you've already configured keyless SSH on the \
+                        selected target hosts and do not wish to use the built \
+                        in keyless configuration in this script.")
     parser.add_argument("-D",
                         "--debug",
                         dest="debug",
@@ -162,20 +205,32 @@ def main():
     if args.host_list == None and args.host_file == None:
         logging.error("No hosts were specified.  Use either -h or -F to specify a list of hosts.  See --help for more info.")
         sys.exit(1)
-    # Generate and parse the host-list before we ask any questions
-    generate_host_list()
-    parse_host_list()
     # Prompt the user for the same information that sosreport requests during
     # initial start.  We'll follow the same design sosreport does here and not
     # perform any validation on these answers.
     username = question("string","Please enter your first initial and last name")
     caseid = question("string","Please enter the case id that you are generating this report for")
-    #FIXME: Find out a way to handle different rootpw's
-    rootPassword = getpass.getpass("Enter the root password for the machines \
+    if args.host_file == None:
+        # If no host_file option is detected ask for rootPassword
+        rootPassword = getpass.getpass("Enter the root password for the machine \
 (if you wish to use different root passwords you must specify them via a host \
 file using -f, --host-file): ")
-    configure_ssh()
+        # Then generate and parse the given host_list
+        host_list = generate_host_list()
+        parse_host_list(host_list)
+    else:
+        # Else assume host_file, parse the host_file instead
+        dictionary = parse_host_file(args.host_file)
+    if args.no_root == False:
+        ssh_precheck()
+        if args.host_file != None:
+            configure_ssh_for_file(dictionary, args.host_file)
+        else:
+            configure_ssh_for_list(host_list)
 
+"""
+Main
+"""
 if __name__ == '__main__':
     atexit.register(exit_handler)
     signal.signal(signal.SIGTERM, signal_handler)
