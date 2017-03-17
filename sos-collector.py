@@ -201,7 +201,7 @@ def collect_sos(directory=None, host_list):
 Create one large archive of the resulting sosreport grab
 """
 def archive_sos():
-    
+
 
 
 """
@@ -242,7 +242,7 @@ Run it
 """
 def main():
     # Define globals
-    global args, rootPassword
+    global args
     # Provide command line arguments
     parser = argparse.ArgumentParser(description="Capture sosreports from a \
                                     provided list of hosts. Resulting sosreports \
