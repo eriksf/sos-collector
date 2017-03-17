@@ -1,4 +1,21 @@
 #!/usr/bin/env python
+
+# Copyright (C) 2017, Kyle Squizzato <ksquizz@gmail.com>
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+
 """
 Tool to run and collect sosreports from list of IPs or FQDNs
 """
@@ -15,6 +32,7 @@ import socket
 import atexit
 import validators
 from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
+from scp import SCPClient
 
 """
 Provide parser validation
@@ -88,15 +106,16 @@ def ssh_precheck():
         pass
 
 """
-Configure keyless ssh for each host in host_list
+Configure keyless ssh for hosts where rootPassword matches (command line entry)
 """
 def configure_ssh_for_list(host_list):
     logging.debug("Run ssh-deploy-key on host_list")
     for each in host_list:
         ssh_deploy_key_args = [ 'ssh-deploy-key',
-                    '-u', 'root',
-                    '-p', '{0}'.format(rootPassword),
-                    '{0}'.format(each)]
+                                '-u', 'root',
+                                '-p', '{0}'.format(rootPassword),
+                                '{0}'.format(each)
+                                ]
         ssh_deploy_key = Popen(ssh_deploy_key_args)
         ssh_deploy_key.wait()
 
@@ -107,6 +126,82 @@ Because of this, this function requires a dict built using parse_host_file()
 """
 def configure_ssh_for_file(host_dict, input_file):
     logging.debug("Run ssh-deploy-key on given hosts in {0}".format(input_file))
+    for key, value in host_dict.iteritems():
+        ssh_deploy_key_args = [ 'ssh-deploy-key',
+                               '-u', 'root',
+                               '-p', '{0}'.format(value),
+                               '{0}'.format(key)
+                               ]
+        ssh_deploy_key = Popen(ssh_deploy_key_args)
+        ssh_deploy_key.wait()
+    # return the host_list once ssh-deploy-key is finished
+    host_list = []
+    for key in host_dict.iteritems():
+        # build a host_list
+        host_list.append(key)
+    # return a set of host_list to prevent duplicates
+    return set(host_list)
+
+"""
+Run sosreport on resulting host_list
+"""
+def run_sos(host_list, customer_name, case_id, plugin_list=None,
+               options=None):
+    # implement a way for users to set whatever sosreport flags they want
+    if options == None:
+        options = ""
+    # sosreport command to run
+    if plugin_list == None:
+        sosreport_command = 'sosreport --name {0} --case-id={1} {2}'.format(customer_name, case_id, options)
+    else:
+        # sosreport_command should include plugin flag with appropriate
+        # plugin_list string: 'PLUGNAME,PLUGNAME2'
+        # implemented via the ONLY_PLUGINS option in sosreport, see man sosreport
+        # for details
+        # {3} denotes extra options to pass
+        sosreport_command = 'sosreport -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
+    # Iterate through host_list and run sosreport on each host
+    # Should be implemented via threading
+    for each in host_list:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.load_system_host_keys()
+        # Shouldn't need password since ssh-copy-key has already been configured
+        # by now
+        logging.debug('Connecting to host: {0} to run sosreport'.format(each))
+        ssh.connect(each,
+                    username="root",
+                    look_for_keys=False
+                    )
+        #FIXME: For debugging log the stdout of the command execution
+        stdin, stdout, stderr = ssh.exec_command(sosreport_command)
+        # Wait for the sosreport commands to finish before continuing
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status == 0:
+            logging.info('Successfully ran sosreport on host {0}'.format(each))
+        else:
+            logging.error('Error running sosreport on host {0}'.format(each))
+            # We'll close the connection but proceed here to try to capture
+            # sosreport on remaining hosts
+            ssh.close()
+
+"""
+Copy resulting sosreports from run_sos from host_list into target directory
+Default is pwd
+"""
+def collect_sos(directory=None, host_list):
+        # Directory to use if argument is given, if None is supplied, just use
+        # pwd for target
+        if directory !=None:
+            target = directory
+        else:
+            target = "."
+
+"""
+Create one large archive of the resulting sosreport grab
+"""
+def archive_sos():
+    
 
 
 """
@@ -174,7 +269,7 @@ def main():
     parser.add_argument("-d",
                         "--directory",
                         dest="directory",
-                        help="Define the targetted directory the sosreports \
+                        help="Define the target directory the sosreports \
                         will be downloaded to and processed in.  Defaults to \
                         the present working directory")
     parser.add_argument("--no-root",
@@ -184,6 +279,10 @@ def main():
                         if you've already configured keyless SSH on the \
                         selected target hosts and do not wish to use the built \
                         in keyless configuration in this script.")
+    parser.add_argument("--threads",
+                        dest="thread_count",
+                        help="Control the number of ssh threads spawned by \
+                        sos-collector to capture data in parallel.  Default 4.")
     parser.add_argument("-D",
                         "--debug",
                         dest="debug",
