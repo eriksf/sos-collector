@@ -175,7 +175,7 @@ def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
         logging.debug('Connecting to host: {0} to run sosreport'.format(each))
         ssh.connect(each,
                     username="root",
-                    look_for_keys=False
+                    #look_for_keys=False
                     )
         # FIXME: For debugging log the stdout of the command execution
         stdin, stdout, stderr = ssh.exec_command(sosreport_command)
