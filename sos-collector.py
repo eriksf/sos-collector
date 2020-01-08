@@ -33,6 +33,7 @@ import atexit
 import validators
 from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 from scp import SCPClient
+from six.moves import input as raw_input
 
 
 def is_valid(hostname):
@@ -107,7 +108,7 @@ def ssh_precheck():
         pass
 
 
-def configure_ssh_for_list(host_list):
+def configure_ssh_for_list(host_list, rootPassword):
     """
     Configure keyless ssh for hosts where rootPassword matches (command line entry)
     """
@@ -319,9 +320,10 @@ def main():
     # perform any validation on these answers.
     username = question("string", "Please enter your first initial and last name")
     caseid = question("string", "Please enter the case id that you are generating this report for")
-    if args.host_file is None and args.no_root is False:
+    if args.host_file is None:
         # If no host_file option is detected ask for rootPassword
-        rootPassword = getpass.getpass("Enter the root password for the machine \
+        if args.no_root is False:
+            rootPassword = getpass.getpass("Enter the root password for the machine \
 (if you wish to use different root passwords you must specify them via a host \
 file using -f, --host-file): ")
         # Then generate and parse the given host_list
@@ -333,9 +335,9 @@ file using -f, --host-file): ")
     if args.no_root is False:
         ssh_precheck()
         if args.host_file is not None:
-            configure_ssh_for_file(dictionary, args.host_file)
+            host_list = configure_ssh_for_file(dictionary, args.host_file)
         else:
-            configure_ssh_for_list(host_list)
+            configure_ssh_for_list(host_list, rootPassword)
     run_sos(host_list, username, caseid)
 
 
