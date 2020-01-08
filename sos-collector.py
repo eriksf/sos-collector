@@ -35,6 +35,8 @@ from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDO
 from scp import SCPClient
 from six.moves import input as raw_input
 
+logger = logging.getLogger(__name__)
+
 
 def is_valid(hostname):
     """
@@ -62,7 +64,7 @@ def parse_host_list(host_list):
     """
     for item in host_list:
         if not is_valid(item):
-            logging.error("{0} is not a valid FQDN or IPv4 address, please correct it and rerun sos-collector".format(item))
+            logger.error("{0} is not a valid FQDN or IPv4 address, please correct it and rerun sos-collector".format(item))
             sys.exit(1)
 
 
@@ -75,7 +77,7 @@ def parse_host_file(input_file):
     try:
         open(input_file, "r+").read()
     except IOError as e:
-        logging.error('Unable to parse host-file: {0}'.format(e))
+        logger.error('Unable to parse host-file: {0}'.format(e))
         sys.exit(1)
     # Create a dictionary of 'hostname': 'rootPassword'
     host_dict = {}
@@ -94,14 +96,14 @@ def ssh_precheck():
     Perform ssh prechecks
     """
     homedir = os.path.expanduser('~')
-    logging.info("Generating keyless ssh for the root user on each host.")
+    logger.info("Generating keyless ssh for the root user on each host.")
     # Check to make sure the user has an id_rsa.pub file before continuing
-    logging.debug("Check for id_rsa.pub existence")
+    logger.debug("Check for id_rsa.pub existence")
     if not os.path.isfile('{0}/.ssh/id_rsa.pub'.format(homedir)):
         # For now we'll just prompt the user to run ssh-keygen on their own.  We
         # can probably use the Crypto library in the future to do this for users
         # but that's a can of worms
-        logging.error("No .ssh/id_rsa.pub file found in home directory \
+        logger.error("No .ssh/id_rsa.pub file found in home directory \
         please create one using ssh-keygen and restart sos-collector")
         sys.exit(1)
     else:
@@ -112,7 +114,7 @@ def configure_ssh_for_list(host_list, rootPassword):
     """
     Configure keyless ssh for hosts where rootPassword matches (command line entry)
     """
-    logging.debug("Run ssh-deploy-key on host_list")
+    logger.debug("Run ssh-deploy-key on host_list")
     for each in host_list:
         ssh_deploy_key_args = ['ssh-deploy-key',
                                '-u', 'root',
@@ -129,7 +131,7 @@ def configure_ssh_for_file(host_dict, input_file):
     here over configure_ssh_for_list() as the rootPassword's can differ here.
     Because of this, this function requires a dict built using parse_host_file()
     """
-    logging.debug("Run ssh-deploy-key on given hosts in {0}".format(input_file))
+    logger.debug("Run ssh-deploy-key on given hosts in {0}".format(input_file))
     for key, value in host_dict.iteritems():
         ssh_deploy_key_args = ['ssh-deploy-key',
                                '-u', 'root',
@@ -172,7 +174,7 @@ def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
         ssh.load_system_host_keys()
         # Shouldn't need password since ssh-copy-key has already been configured
         # by now
-        logging.debug('Connecting to host: {0} to run sosreport'.format(each))
+        logger.debug('Connecting to host: {0} to run sosreport'.format(each))
         ssh.connect(each,
                     username="root",
                     #look_for_keys=False
@@ -216,7 +218,7 @@ def exit_handler():
     """
     Cleanup and log on exit
     """
-    logging.info('sos-collector has exited')
+    logger.info('sos-collector has exited')
 
 
 """
@@ -226,7 +228,7 @@ SIGNALS_TO_NAMES_DICT = dict((getattr(signal, n), n) for n in dir(signal) if n.s
 
 
 def signal_handler(signum, frame, retries=0):
-    logging.error("Received signal: {0}({1})".format(SIGNALS_TO_NAMES_DICT[signum], signum))
+    logger.error("Received signal: {0}({1})".format(SIGNALS_TO_NAMES_DICT[signum], signum))
     raise RuntimeError('Received signal: {0}({1})'.format(SIGNALS_TO_NAMES_DICT[signum], signum))
     sys.exit(signum)
 
@@ -300,20 +302,22 @@ def main():
                         action='store_true',
                         help="Enable debug mode")
     args = parser.parse_args()
+
     # Control whether debug logging should be enabled or not
-    logger = logging.getLogger(name=None)
-    logging.basicConfig(format='%(levelname)s: %(message)s',
-                        level=logging.INFO
-                        )
     if args.debug is True:
         logging.basicConfig(stream=sys.stdout,
                             level=logging.DEBUG,
                             format='%(asctime)s.%(msecs)d %(levelname)s %(module)s | %(funcName)s: %(message)s',
                             datefmt="%Y-%m-%d %H:%M:%S"
                             )
+    else:
+        logging.basicConfig(format='%(levelname)s: %(message)s',
+                            level=logging.INFO
+                            )
+
     # Check to ensure a host_list is provided
     if args.host_list is None and args.host_file is None:
-        logging.error("No hosts were specified.  Use either -h or -F to specify a list of hosts.  See --help for more info.")
+        logger.error("No hosts were specified.  Use either -h or -F to specify a list of hosts.  See --help for more info.")
         sys.exit(1)
     # Prompt the user for the same information that sosreport requests during
     # initial start.  We'll follow the same design sosreport does here and not
