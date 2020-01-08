@@ -319,7 +319,7 @@ def main():
     # perform any validation on these answers.
     username = question("string", "Please enter your first initial and last name")
     caseid = question("string", "Please enter the case id that you are generating this report for")
-    if args.host_file is None:
+    if args.host_file is None and args.no_root is False:
         # If no host_file option is detected ask for rootPassword
         rootPassword = getpass.getpass("Enter the root password for the machine \
 (if you wish to use different root passwords you must specify them via a host \
