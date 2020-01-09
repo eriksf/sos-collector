@@ -21,17 +21,17 @@ Tool to run and collect sosreports from list of IPs or FQDNs
 """
 import sys
 import paramiko
-import threading
+# import threading
 import os
 import logging
 import argparse
-import getpass
-import time
+# import getpass
+# import time
 import signal
-import socket
+# import socket
 import atexit
 import validators
-from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
+# from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 from scp import SCPClient
 from six.moves import input as raw_input
 
@@ -46,32 +46,29 @@ def is_valid(hostname):
     if (validators.ip_address.ipv4(hostname) or validators.domain(hostname)):
         return True
     else:
+        logger.error("{0} is not a valid FQDN or IPv4 address".format(hostname))
         return False
 
 
-def generate_host_list():
+def generate_host_list(username, caseid):
     """
     Generate the list of hosts to use
     """
     host_list = set(args.host_list.split(","))
-    return host_list
-
-
-def parse_host_list(host_list):
-    """
-    Parse the generated list and determine if the provided hostnames or IP addresses
-    are truly valid using is_valid()
-    """
-    for item in host_list:
-        if not is_valid(item):
-            logger.error("{0} is not a valid FQDN or IPv4 address, please correct it and rerun sos-collector".format(item))
+    host_dict = {}
+    for host in host_list:
+        if not is_valid(host):
             sys.exit(1)
+        host_dict[host] = (username, caseid)
+
+    return host_dict
 
 
 def parse_host_file(input_file):
     """
     Parse properly formatted host_file, similar to parse_host_list but for a file
     instead of a comma-delimted list of hosts
+    hostname::username::case-id
     """
     # Read input file
     try:
@@ -85,9 +82,12 @@ def parse_host_file(input_file):
         for line in f:
             x = line.split('::')
             host = x[0]
-            password = x[1]
-            password = password[:-1]
-            host_dict[host] = password
+            if not is_valid(host):
+                sys.exit(1)
+            username = x[1]
+            caseid = x[2]
+            caseid = caseid[:-1]
+            host_dict[host] = (username, caseid)
     return host_dict
 
 
@@ -96,9 +96,7 @@ def ssh_precheck():
     Perform ssh prechecks
     """
     homedir = os.path.expanduser('~')
-    logger.info("Generating keyless ssh for the root user on each host.")
-    # Check to make sure the user has an id_rsa.pub file before continuing
-    logger.debug("Check for id_rsa.pub existence")
+    logger.info("Checking for id_rsa.pub existence for keyless ssh...")
     if not os.path.isfile('{0}/.ssh/id_rsa.pub'.format(homedir)):
         # For now we'll just prompt the user to run ssh-keygen on their own.  We
         # can probably use the Crypto library in the future to do this for users
@@ -106,50 +104,9 @@ def ssh_precheck():
         logger.error("No .ssh/id_rsa.pub file found in home directory \
         please create one using ssh-keygen and restart sos-collector")
         sys.exit(1)
-    else:
-        pass
 
 
-def configure_ssh_for_list(host_list, rootPassword):
-    """
-    Configure keyless ssh for hosts where rootPassword matches (command line entry)
-    """
-    logger.debug("Run ssh-deploy-key on host_list")
-    for each in host_list:
-        ssh_deploy_key_args = ['ssh-deploy-key',
-                               '-u', 'root',
-                               '-p', '{0}'.format(rootPassword),
-                               '{0}'.format(each)
-                               ]
-        ssh_deploy_key = Popen(ssh_deploy_key_args)
-        ssh_deploy_key.wait()
-
-
-def configure_ssh_for_file(host_dict, input_file):
-    """
-    Configure keyless ssh for each host in a given host_file, extra steps are needed
-    here over configure_ssh_for_list() as the rootPassword's can differ here.
-    Because of this, this function requires a dict built using parse_host_file()
-    """
-    logger.debug("Run ssh-deploy-key on given hosts in {0}".format(input_file))
-    for key, value in host_dict.iteritems():
-        ssh_deploy_key_args = ['ssh-deploy-key',
-                               '-u', 'root',
-                               '-p', '{0}'.format(value),
-                               '{0}'.format(key)
-                               ]
-        ssh_deploy_key = Popen(ssh_deploy_key_args)
-        ssh_deploy_key.wait()
-    # return the host_list once ssh-deploy-key is finished
-    host_list = []
-    for key in host_dict.iteritems():
-        # build a host_list
-        host_list.append(key)
-    # return a set of host_list to prevent duplicates
-    return set(host_list)
-
-
-def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
+def run_sos(host_dict, plugin_list=None, options=None):
     """
     Run sosreport on resulting host_list
     """
@@ -158,27 +115,32 @@ def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
     # implement a way for users to set whatever sosreport flags they want
     if options is None:
         options = ""
-    # sosreport command to run
-    if plugin_list is None:
-        sosreport_command = 'sosreport --batch --name {0} --case-id={1} {2}'.format(customer_name, case_id, options)
-    else:
-        # sosreport_command should include plugin flag with appropriate
-        # plugin_list string: 'PLUGNAME,PLUGNAME2'
-        # implemented via the ONLY_PLUGINS option in sosreport, see man sosreport
-        # for details
-        # {3} denotes extra options to pass
-        sosreport_command = 'sosreport --batch -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
+
     # Iterate through host_list and run sosreport on each host
-    # Should be implemented via threading
-    for each in host_list:
+    # FIXME: implement via threading
+    for host in host_dict:
+        # sosreport command to run
+        customer_name = host_dict[host][0]
+        case_id = host_dict[host][1]
+
+        if plugin_list is None:
+            sosreport_command = 'sosreport --batch --name {0} --case-id={1} {2}'.format(customer_name, case_id, options)
+        else:
+            # sosreport_command should include plugin flag with appropriate
+            # plugin_list string: 'PLUGNAME,PLUGNAME2'
+            # implemented via the ONLY_PLUGINS option in sosreport, see man sosreport
+            # for details
+            # {3} denotes extra options to pass
+            sosreport_command = 'sosreport --batch -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
+
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.load_system_host_keys()
             # Shouldn't need password since ssh-copy-key has already been configured
         #    by now
-            logger.debug('Connecting to host: {0} to run sosreport'.format(each))
-            ssh.connect(each,
+            logger.debug('Connecting to host: {0} to run sosreport'.format(host))
+            ssh.connect(host,
                         username="root",
                         look_for_keys=True
                         )
@@ -191,13 +153,13 @@ def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
         # Wait for the sosreport commands to finish before continuing
         exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
-            logger.info('Successfully ran sosreport on host {0}'.format(each))
+            logger.info('Successfully ran sosreport on host {0}'.format(host))
             output = stdout.readlines()
             zipfile = (output[-6]).strip()
             logger.info("Report archive is '{}'".format(zipfile))
-            report_files[each] = zipfile
+            report_files[host] = zipfile
         else:
-            logger.error('Error running sosreport on host {0}'.format(each))
+            logger.error('Error running sosreport on host {0}'.format(host))
             # We'll close the connection but proceed here to try to capture
             # sosreport on remaining hosts
         ssh.close()
@@ -323,13 +285,6 @@ def main():
                         help="Define the target directory the sosreports \
                         will be downloaded to and processed in.  Defaults to \
                         the present working directory")
-    parser.add_argument("--no-root",
-                        dest="no_root",
-                        action='store_true',
-                        help="Skips the root password asks.  Use this option \
-                        if you've already configured keyless SSH on the \
-                        selected target hosts and do not wish to use the built \
-                        in keyless configuration in this script.")
     parser.add_argument("--threads",
                         dest="thread_count",
                         help="Control the number of ssh threads spawned by \
@@ -357,31 +312,22 @@ def main():
     if args.host_list is None and args.host_file is None:
         logger.error("No hosts were specified.  Use either -h or -F to specify a list of hosts.  See --help for more info.")
         sys.exit(1)
-    # Prompt the user for the same information that sosreport requests during
-    # initial start.  We'll follow the same design sosreport does here and not
-    # perform any validation on these answers.
-    username = question("string", "Please enter your first initial and last name")
-    caseid = question("string", "Please enter the case id that you are generating this report for")
+
     if args.host_file is None:
-        # If no host_file option is detected ask for rootPassword
-        if args.no_root is False:
-            rootPassword = getpass.getpass("Enter the root password for the machine \
-(if you wish to use different root passwords you must specify them via a host \
-file using -f, --host-file): ")
+        # Prompt the user for the same information that sosreport requests during
+        # initial start.  We'll follow the same design sosreport does here and not
+        # perform any validation on these answers.
+        username = question("string", "Please enter your first initial and last name")
+        caseid = question("string", "Please enter the case id that you are generating this report for")
+
         # Then generate and parse the given host_list
-        host_list = generate_host_list()
-        parse_host_list(host_list)
+        host_dict = generate_host_list(username, caseid)
     else:
         # Else assume host_file, parse the host_file instead
-        dictionary = parse_host_file(args.host_file)
-    if args.no_root is False:
-        ssh_precheck()
-        if args.host_file is not None:
-            host_list = configure_ssh_for_file(dictionary, args.host_file)
-        else:
-            configure_ssh_for_list(host_list, rootPassword)
+        host_dict = parse_host_file(args.host_file)
 
-    report_files = run_sos(host_list, username, caseid)
+    ssh_precheck()
+    report_files = run_sos(host_dict)
     if report_files:
         collect_sos(report_files, args.directory)
 
