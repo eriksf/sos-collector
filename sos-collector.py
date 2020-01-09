@@ -153,49 +153,68 @@ def run_sos(host_list, customer_name, case_id, plugin_list=None, options=None):
     """
     Run sosreport on resulting host_list
     """
+    report_files = {}
+
     # implement a way for users to set whatever sosreport flags they want
     if options is None:
         options = ""
     # sosreport command to run
     if plugin_list is None:
-        sosreport_command = 'sosreport --name {0} --case-id={1} {2}'.format(customer_name, case_id, options)
+        sosreport_command = 'sosreport --batch --name {0} --case-id={1} {2}'.format(customer_name, case_id, options)
     else:
         # sosreport_command should include plugin flag with appropriate
         # plugin_list string: 'PLUGNAME,PLUGNAME2'
         # implemented via the ONLY_PLUGINS option in sosreport, see man sosreport
         # for details
         # {3} denotes extra options to pass
-        sosreport_command = 'sosreport -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
+        sosreport_command = 'sosreport --batch -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
     # Iterate through host_list and run sosreport on each host
     # Should be implemented via threading
     for each in host_list:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.load_system_host_keys()
-        # Shouldn't need password since ssh-copy-key has already been configured
-        # by now
-        logger.debug('Connecting to host: {0} to run sosreport'.format(each))
-        ssh.connect(each,
-                    username="root",
-                    #look_for_keys=False
-                    )
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.load_system_host_keys()
+            # Shouldn't need password since ssh-copy-key has already been configured
+        #    by now
+            logger.debug('Connecting to host: {0} to run sosreport'.format(each))
+            ssh.connect(each,
+                        username="root",
+                        look_for_keys=True
+                        )
+        except paramiko.auth_handler.AuthenticationException as error:
+            logger.error("Authentication failed, check proper public key: {}".format(error))
+            raise error
+
         # FIXME: For debugging log the stdout of the command execution
         stdin, stdout, stderr = ssh.exec_command(sosreport_command)
         # Wait for the sosreport commands to finish before continuing
         exit_status = stdout.channel.recv_exit_status()
         if exit_status == 0:
-            logging.info('Successfully ran sosreport on host {0}'.format(each))
+            logger.info('Successfully ran sosreport on host {0}'.format(each))
+            output = stdout.readlines()
+            zipfile = (output[-6]).strip()
+            logger.info("Report archive is '{}'".format(zipfile))
+            report_files[each] = zipfile
         else:
-            logging.error('Error running sosreport on host {0}'.format(each))
+            logger.error('Error running sosreport on host {0}'.format(each))
             # We'll close the connection but proceed here to try to capture
             # sosreport on remaining hosts
-            ssh.close()
+        ssh.close()
+    return report_files
 
 
-def collect_sos(directory=None):
+def progress(filename, size, sent):
+    """
+    Track progress of scp get.
+    """
+    sys.stdout.write("%s\'s progress: %.2f%%   \r" % (filename, float(sent) / float(size) * 100))
+
+
+def collect_sos(report_files, directory=None):
     """
     Copy resulting sosreports from run_sos from host_list into target directory
-    Default is pwd
+    Default is cwd
     """
     # Directory to use if argument is given, if None is supplied, just use
     # pwd for target
@@ -204,7 +223,26 @@ def collect_sos(directory=None):
     else:
         target = "."
 
-    return target
+    for host in report_files:
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.load_system_host_keys()
+            # Shouldn't need password since ssh-copy-key has already been configured
+        #    by now
+            logger.debug('Grabbing report archive {0} from host {1}'.format(report_files[host], host))
+            ssh.connect(host,
+                        username="root",
+                        look_for_keys=True
+                        )
+            scp = SCPClient(ssh.get_transport(), progress)
+        except paramiko.auth_handler.AuthenticationException as error:
+            logger.error("Authentication failed, check proper public key: {}".format(error))
+            raise error
+
+        scp.get(report_files[host], target)
+        scp.close()
+        ssh.close()
 
 
 def archive_sos():
@@ -342,7 +380,10 @@ file using -f, --host-file): ")
             host_list = configure_ssh_for_file(dictionary, args.host_file)
         else:
             configure_ssh_for_list(host_list, rootPassword)
-    run_sos(host_list, username, caseid)
+
+    report_files = run_sos(host_list, username, caseid)
+    if report_files:
+        collect_sos(args.directory, report_files)
 
 
 """
