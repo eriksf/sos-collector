@@ -383,7 +383,7 @@ file using -f, --host-file): ")
 
     report_files = run_sos(host_list, username, caseid)
     if report_files:
-        collect_sos(args.directory, report_files)
+        collect_sos(report_files, args.directory)
 
 
 """
