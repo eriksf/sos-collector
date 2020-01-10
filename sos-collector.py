@@ -139,7 +139,7 @@ def run_sos(host_dict, plugin_list=None, options=None):
             ssh.load_system_host_keys()
             # Shouldn't need password since ssh-copy-key has already been configured
         #    by now
-            logger.debug('Connecting to host: {0} to run sosreport'.format(host))
+            logger.info('Connecting to host: {0} to run sosreport'.format(host))
             ssh.connect(host,
                         username="root",
                         look_for_keys=True
@@ -192,7 +192,7 @@ def collect_sos(report_files, directory=None):
             ssh.load_system_host_keys()
             # Shouldn't need password since ssh-copy-key has already been configured
         #    by now
-            logger.debug('Grabbing report archive {0} from host {1}'.format(report_files[host], host))
+            logger.info('Grabbing report archive {0} from host {1}'.format(report_files[host], host))
             ssh.connect(host,
                         username="root",
                         look_for_keys=True
