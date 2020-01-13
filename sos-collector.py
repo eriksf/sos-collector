@@ -114,7 +114,7 @@ def ssh_task(host, command):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.load_system_host_keys()
         # Shouldn't need password since ssh-copy-key has already been configured
-    #    by now
+        # by now
         logger.info('Connecting to host: {0} to run sosreport'.format(host))
         ssh.connect(host,
                     username="root",
