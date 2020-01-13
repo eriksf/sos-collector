@@ -34,6 +34,7 @@ import validators
 # from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 from scp import SCPClient
 from six.moves import input as raw_input
+from concurrent import futures
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,43 @@ def ssh_precheck():
         sys.exit(1)
 
 
-def run_sos(host_dict, plugin_list=None, options=None):
+def ssh_task(host, command):
+    """
+    Run command on given host
+    """
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.load_system_host_keys()
+        # Shouldn't need password since ssh-copy-key has already been configured
+    #    by now
+        logger.info('Connecting to host: {0} to run sosreport'.format(host))
+        ssh.connect(host,
+                    username="root",
+                    look_for_keys=True
+                    )
+    except paramiko.auth_handler.AuthenticationException as error:
+        logger.error("Authentication failed, check proper public key: {}".format(error))
+        raise error
+
+    # FIXME: For debugging log the stdout of the command execution
+    stdin, stdout, stderr = ssh.exec_command(command)
+    # Wait for the sosreport commands to finish before continuing
+    exit_status = stdout.channel.recv_exit_status()
+    if exit_status == 0:
+        logger.info('Successfully ran sosreport on host {0}'.format(host))
+        output = stdout.readlines()
+        zipfile = (output[-6]).strip()
+        logger.info("Report archive is '{}'".format(zipfile))
+    else:
+        logger.error('Error running sosreport on host {0}'.format(host))
+        # We'll close the connection but proceed here to try to capture
+        # sosreport on remaining hosts
+    ssh.close()
+    return (host, zipfile)
+
+
+def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
     """
     Run sosreport on resulting host_list
     """
@@ -117,7 +154,9 @@ def run_sos(host_dict, plugin_list=None, options=None):
         options = ""
 
     # Iterate through host_list and run sosreport on each host
-    # FIXME: implement via threading
+    tpex = futures.ThreadPoolExecutor(max_workers=max_threads)
+    logger.debug("Main thread starting...")
+    wait_for_tasks = []
     for host in host_dict:
         # sosreport command to run
         customer_name = host_dict[host][0]
@@ -132,37 +171,16 @@ def run_sos(host_dict, plugin_list=None, options=None):
             # for details
             # {3} denotes extra options to pass
             sosreport_command = 'sosreport --batch -o {0} --name={1} --case-id={2} {3}'.format(plugin_list, customer_name, case_id, options)
+        wait_for_tasks.append(tpex.submit(ssh_task, host, sosreport_command))
 
+    for f in futures.as_completed(wait_for_tasks):
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.load_system_host_keys()
-            # Shouldn't need password since ssh-copy-key has already been configured
-        #    by now
-            logger.info('Connecting to host: {0} to run sosreport'.format(host))
-            ssh.connect(host,
-                        username="root",
-                        look_for_keys=True
-                        )
+            host, zipfile = f.result()
+            report_files[host] = zipfile
+            logger.info("Main thread: got result {} from host {}".format(zipfile, host))
         except paramiko.auth_handler.AuthenticationException as error:
-            logger.error("Authentication failed, check proper public key: {}".format(error))
             raise error
 
-        # FIXME: For debugging log the stdout of the command execution
-        stdin, stdout, stderr = ssh.exec_command(sosreport_command)
-        # Wait for the sosreport commands to finish before continuing
-        exit_status = stdout.channel.recv_exit_status()
-        if exit_status == 0:
-            logger.info('Successfully ran sosreport on host {0}'.format(host))
-            output = stdout.readlines()
-            zipfile = (output[-6]).strip()
-            logger.info("Report archive is '{}'".format(zipfile))
-            report_files[host] = zipfile
-        else:
-            logger.error('Error running sosreport on host {0}'.format(host))
-            # We'll close the connection but proceed here to try to capture
-            # sosreport on remaining hosts
-        ssh.close()
     return report_files
 
 
@@ -327,7 +345,7 @@ def main():
         host_dict = parse_host_file(args.host_file)
 
     ssh_precheck()
-    report_files = run_sos(host_dict)
+    report_files = run_sos(host_dict, max_threads=args.thread_count)
     if report_files:
         collect_sos(report_files, args.directory)
 
