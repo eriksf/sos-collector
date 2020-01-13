@@ -196,7 +196,7 @@ def progress(filename, size, sent):
     sys.stdout.write("%s\'s progress: %.2f%%   \r" % (filename, float(sent) / float(size) * 100))
 
 
-def scp_task(host, file, target):
+def scp_task(host, filename, target):
     """
     Grab file from given host and copy to target.
     """
@@ -206,15 +206,14 @@ def scp_task(host, file, target):
         ssh.load_system_host_keys()
         # Shouldn't need password since ssh-copy-key has already been configured
         # by now
-        logger.info('Grabbing report archive {0} from host {1}'.format(file, host))
+        logger.info('Grabbing report archive {0} from host {1}'.format(filename, host))
         ssh.connect(host,
                     username="root",
                     look_for_keys=True
                     )
         scp = SCPClient(ssh.get_transport(), progress=progress)
-        output = scp.get(file, target)
-        logger.debug("SCP get output = {}".format(output))
-        return output
+        scp.get(filename, target)
+        return (host, filename)
     except paramiko.auth_handler.AuthenticationException as error:
         logger.error("Authentication failed, check proper public key: {}".format(error))
         raise error
@@ -245,9 +244,9 @@ def collect_sos(report_files, directory=None, max_threads=4):
 
     for f in futures.as_completed(wait_for_tasks):
         try:
-            output = f.result()
-            if output:
-                logger.info("Got result '{}' from host {}".format(output, host))
+            host, filename = f.result()
+            if host and filename:
+                logger.info("Downloaded file '{}' from host {}".format(filename, host))
         except paramiko.auth_handler.AuthenticationException as error:
             raise error
 
