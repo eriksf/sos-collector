@@ -81,6 +81,8 @@ def parse_host_file(input_file):
     host_dict = {}
     with open(input_file, 'r') as f:
         for line in f:
+            if line.startswith('#'):
+                continue
             x = line.split('::')
             host = x[0]
             if not is_valid(host):
@@ -122,25 +124,26 @@ def ssh_task(host, command):
                     username="root",
                     look_for_keys=True
                     )
+
+        stdin, stdout, stderr = ssh.exec_command(command)
+        # Wait for the sosreport commands to finish before continuing
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status == 0:
+            logger.info('Successfully ran sosreport on host {0}'.format(host))
+            output = stdout.readlines()
+            zipfile = (output[-6]).strip()
+            logger.info("Report archive is '{}'".format(zipfile))
+        else:
+            logger.error('Error running sosreport on host {0}'.format(host))
+            # We'll close the connection but proceed here to try to capture
+            # sosreport on remaining hosts
+        return (host, zipfile)
     except paramiko.auth_handler.AuthenticationException as error:
         logger.error("Authentication failed, check proper public key: {}".format(error))
         raise error
-
-    # FIXME: For debugging log the stdout of the command execution
-    stdin, stdout, stderr = ssh.exec_command(command)
-    # Wait for the sosreport commands to finish before continuing
-    exit_status = stdout.channel.recv_exit_status()
-    if exit_status == 0:
-        logger.info('Successfully ran sosreport on host {0}'.format(host))
-        output = stdout.readlines()
-        zipfile = (output[-6]).strip()
-        logger.info("Report archive is '{}'".format(zipfile))
-    else:
-        logger.error('Error running sosreport on host {0}'.format(host))
-        # We'll close the connection but proceed here to try to capture
-        # sosreport on remaining hosts
-    ssh.close()
-    return (host, zipfile)
+    finally:
+        if ssh:
+            ssh.close()
 
 
 def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
@@ -155,7 +158,7 @@ def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
 
     # Iterate through host_list and run sosreport on each host
     tpex = futures.ThreadPoolExecutor(max_workers=max_threads)
-    logger.debug("Main thread starting...")
+    logger.debug("Starting thread pool...")
     wait_for_tasks = []
     for host in host_dict:
         # sosreport command to run
@@ -176,8 +179,9 @@ def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
     for f in futures.as_completed(wait_for_tasks):
         try:
             host, zipfile = f.result()
-            report_files[host] = zipfile
-            logger.info("Main thread: got result {} from host {}".format(zipfile, host))
+            if host and zipfile:
+                report_files[host] = zipfile
+                logger.info("Got result {} from host {}".format(zipfile, host))
         except paramiko.auth_handler.AuthenticationException as error:
             raise error
 
@@ -216,13 +220,15 @@ def collect_sos(report_files, directory=None):
                         look_for_keys=True
                         )
             scp = SCPClient(ssh.get_transport(), progress)
+            scp.get(report_files[host], target)
         except paramiko.auth_handler.AuthenticationException as error:
             logger.error("Authentication failed, check proper public key: {}".format(error))
             raise error
-
-        scp.get(report_files[host], target)
-        scp.close()
-        ssh.close()
+        finally:
+            if scp:
+                scp.close()
+            if ssh:
+                ssh.close()
 
 
 def archive_sos():
