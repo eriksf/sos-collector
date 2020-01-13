@@ -82,6 +82,7 @@ def parse_host_file(input_file):
     with open(input_file, 'r') as f:
         for line in f:
             if line.startswith('#'):
+                logger.debug("Ignoring line '{}'...".format(line))
                 continue
             x = line.split('::')
             host = x[0]
@@ -158,7 +159,7 @@ def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
 
     # Iterate through host_list and run sosreport on each host
     tpex = futures.ThreadPoolExecutor(max_workers=max_threads)
-    logger.debug("Starting thread pool...")
+    logger.debug("Starting ssh thread pool...")
     wait_for_tasks = []
     for host in host_dict:
         # sosreport command to run
@@ -181,7 +182,7 @@ def run_sos(host_dict, plugin_list=None, options=None, max_threads=4):
             host, zipfile = f.result()
             if host and zipfile:
                 report_files[host] = zipfile
-                logger.info("Got result {} from host {}".format(zipfile, host))
+                logger.info("Got result '{}' from host {}".format(zipfile, host))
         except paramiko.auth_handler.AuthenticationException as error:
             raise error
 
@@ -195,7 +196,36 @@ def progress(filename, size, sent):
     sys.stdout.write("%s\'s progress: %.2f%%   \r" % (filename, float(sent) / float(size) * 100))
 
 
-def collect_sos(report_files, directory=None):
+def scp_task(host, file, target):
+    """
+    Grab file from given host and copy to target.
+    """
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.load_system_host_keys()
+        # Shouldn't need password since ssh-copy-key has already been configured
+        # by now
+        logger.info('Grabbing report archive {0} from host {1}'.format(file, host))
+        ssh.connect(host,
+                    username="root",
+                    look_for_keys=True
+                    )
+        scp = SCPClient(ssh.get_transport(), progress=progress)
+        output = scp.get(file, target)
+        logger.debug("SCP get output = {}".format(output))
+        return output
+    except paramiko.auth_handler.AuthenticationException as error:
+        logger.error("Authentication failed, check proper public key: {}".format(error))
+        raise error
+    finally:
+        if scp:
+            scp.close()
+        if ssh:
+            ssh.close()
+
+
+def collect_sos(report_files, directory=None, max_threads=4):
     """
     Copy resulting sosreports from run_sos from host_list into target directory
     Default is cwd
@@ -207,28 +237,19 @@ def collect_sos(report_files, directory=None):
     else:
         target = "."
 
+    tpex = futures.ThreadPoolExecutor(max_workers=max_threads)
+    logger.debug("Starting scp thread pool...")
+    wait_for_tasks = []
     for host in report_files:
+        wait_for_tasks.append(tpex.submit(scp_task, host, report_files[host], target))
+
+    for f in futures.as_completed(wait_for_tasks):
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.load_system_host_keys()
-            # Shouldn't need password since ssh-copy-key has already been configured
-        #    by now
-            logger.info('Grabbing report archive {0} from host {1}'.format(report_files[host], host))
-            ssh.connect(host,
-                        username="root",
-                        look_for_keys=True
-                        )
-            scp = SCPClient(ssh.get_transport(), progress=progress)
-            scp.get(report_files[host], target)
+            output = f.result()
+            if output:
+                logger.info("Got result '{}' from host {}".format(output, host))
         except paramiko.auth_handler.AuthenticationException as error:
-            logger.error("Authentication failed, check proper public key: {}".format(error))
             raise error
-        finally:
-            if scp:
-                scp.close()
-            if ssh:
-                ssh.close()
 
 
 def archive_sos():
@@ -353,8 +374,8 @@ def main():
     ssh_precheck()
     report_files = run_sos(host_dict, max_threads=args.thread_count)
     if report_files:
-        logger.info(report_files)
-        collect_sos(report_files, args.directory)
+        logger.debug("Report files: {}".format(report_files))
+        collect_sos(report_files, directory=args.directory, max_threads=args.thread_count)
 
 
 """
