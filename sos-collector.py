@@ -219,7 +219,7 @@ def collect_sos(report_files, directory=None):
                         username="root",
                         look_for_keys=True
                         )
-            scp = SCPClient(ssh.get_transport(), progress)
+            scp = SCPClient(ssh.get_transport(), progress=progress)
             scp.get(report_files[host], target)
         except paramiko.auth_handler.AuthenticationException as error:
             logger.error("Authentication failed, check proper public key: {}".format(error))
