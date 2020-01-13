@@ -318,11 +318,11 @@ def main():
     if args.debug is True:
         logging.basicConfig(stream=sys.stdout,
                             level=logging.DEBUG,
-                            format='%(asctime)s.%(msecs)d %(levelname)s %(module)s | %(funcName)s: %(message)s',
+                            format='%(asctime)s.%(msecs)d %(levelname)s %(module)s %(threadName)s | %(funcName)s: %(message)s',
                             datefmt="%Y-%m-%d %H:%M:%S"
                             )
     else:
-        logging.basicConfig(format='%(levelname)s: %(message)s',
+        logging.basicConfig(format='%(levelname)s %(threadName)s: %(message)s',
                             level=logging.INFO
                             )
 
@@ -347,6 +347,7 @@ def main():
     ssh_precheck()
     report_files = run_sos(host_dict, max_threads=args.thread_count)
     if report_files:
+        logger.info(report_files)
         collect_sos(report_files, args.directory)
 
 
