@@ -21,17 +21,12 @@ Tool to run and collect sosreports from list of IPs or FQDNs
 """
 import sys
 import paramiko
-# import threading
 import os
 import logging
 import argparse
-# import getpass
-# import time
 import signal
-# import socket
 import atexit
 import validators
-# from subprocess import Popen, call, CalledProcessError, check_output, PIPE, STDOUT
 from scp import SCPClient
 from six.moves import input as raw_input
 from concurrent import futures
